@@ -28,9 +28,6 @@ _CS_ENUM_HEAD_RE = re.compile(r"\benum\s+(\w+)\b(?:\s*:\s*[\w.]+)?\s*\{")
 _CS_MEMBER_RE = re.compile(
     r"\b([A-Za-z_]\w*)\s*(?:=\s*(\"[^\"]*\"|'[^']*'|-?\d+))?",
 )
-_LITERAL_LINE_RE = re.compile(
-    r"""(["'])((?:\\.|(?!\1).)*)\1"""
-)
 _SKIP_ENUM_NAMES = {"optional", "override", "transient", "serializable"}
 
 

@@ -162,7 +162,7 @@ def annotate_units(graph: dict) -> None:
             node["summary"] = f"{display}：{purpose}"
 
 
-def _path_purpose(graph: dict, path: dict) -> str:
+def _path_purpose(graph: dict, path: dict) -> tuple[str, str, str]:
     node_by_id = {n["id"]: n for n in graph.get("nodes", [])}
     parts: list[str] = []
     entry = ""

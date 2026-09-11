@@ -9,8 +9,6 @@ from pathlib import Path
 
 from common import classify_layer, load_profile
 
-_CONTROL = {"if", "for", "while", "switch", "catch", "return", "new", "super", "this"}
-
 
 def keyword_variants(keyword: str, extra_variants: list[str] | None = None) -> list[str]:
     """Expand a keyword into common naming variants (longest first)."""

@@ -152,15 +152,14 @@
   }
   #graph-search:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
   .layer-tabs{display:flex;flex-direction:column;gap:7px}
-  .layer-chip,.layer-tab,.node-jump,.result-item{
+  .layer-tab,.node-jump,.result-item{
     width:100%;border:1px solid var(--line);background:var(--panel);border-radius:var(--r);padding:8px 9px;
     display:flex;align-items:center;gap:var(--sp-2);text-align:left;color:var(--ink);cursor:pointer;
     transition:border-color .15s,background .15s;
   }
-  .layer-chip:hover,.layer-tab:hover,.node-jump:hover,.result-item:hover{border-color:currentColor;background:var(--accent-soft)}
-  .layer-chip span,.layer-tab:before{width:9px;height:9px;border-radius:50%;background:currentColor;flex:0 0 auto}
-  .layer-tab:before{content:""}
-  .layer-chip b,.layer-tab b,.node-jump em{margin-left:auto;color:var(--muted);font-style:normal;font-size:var(--fs-base)}
+  .layer-tab:hover,.node-jump:hover,.result-item:hover{border-color:currentColor;background:var(--accent-soft)}
+  .layer-tab:before{content:"";width:9px;height:9px;border-radius:50%;background:currentColor;flex:0 0 auto}
+  .layer-tab b,.node-jump em{margin-left:auto;color:var(--muted);font-style:normal;font-size:var(--fs-base)}
   .layer-tab.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:700}
   .layer-tab.active b{color:var(--accent)}
   .node-jump span{width:22px;height:22px;border-radius:50%;background:var(--panel-2);display:grid;place-items:center;color:var(--muted);font-size:var(--fs-sm)}
@@ -282,7 +281,7 @@
   /* keyboard focus rings — token-driven, visible only for keyboard nav */
   button:focus-visible,input:focus-visible,.layer-tab:focus-visible,
   .result-item:focus-visible,.node-jump:focus-visible,.path-lane:focus-visible,
-  .tour-step:focus-visible,.link-list button:focus-visible,.layer-chip:focus-visible{
+  .tour-step:focus-visible,.link-list button:focus-visible{
     outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--r-sm);
   }
   /* slim token-driven scrollbars (WebKit + Firefox) */
@@ -818,14 +817,6 @@
   });
   document.querySelectorAll(".tour-step").forEach((button) => {
     button.addEventListener("click", () => selectNode(button.dataset.nodeId, true));
-  });
-  document.querySelectorAll(".layer-chip").forEach((button) => {
-    button.addEventListener("click", () => {
-      const layer = button.dataset.layer;
-      search.value = layer || "";
-      runSearch();
-      selectLayerTab(layer || "all");
-    });
   });
   document.querySelectorAll(".layer-tab").forEach((button) => {
     button.addEventListener("click", () => selectLayerTab(button.dataset.layer || "all"));

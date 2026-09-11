@@ -508,20 +508,6 @@ def _usages_html(graph: dict) -> str:
             + "".join(rows) + "</table>")
 
 
-def _layer_summary_html(graph: dict) -> str:
-    counts: dict[str, int] = {}
-    for n in graph.get("nodes", []):
-        layer = n.get("layer") or "Other"
-        counts[layer] = counts.get(layer, 0) + 1
-    if not counts:
-        return '<p class="muted">无节点</p>'
-    return "".join(
-        f'<button type="button" class="layer-chip {_layer_class(layer)}" data-layer="{_attr(layer)}">'
-        f'<span></span>{_esc(layer)} <b>{count}</b></button>'
-        for layer, count in sorted(counts.items(), key=lambda item: item[0])
-    )
-
-
 def _legend_html(graph: dict) -> str:
     """Server-rendered layer legend for the top bar (layer color · count)."""
     counts = _layer_counts(graph)
@@ -715,7 +701,6 @@ def render(graph: dict, keyword: str, meta: dict, template_path: Path) -> str:
     out = out.replace("{{MAIN_PATHS_HTML}}", _main_paths_html(graph))
     out = out.replace("{{TOUR_HTML}}", _tour_html(graph))
     out = out.replace("{{LAYER_EDGES_HTML}}", _layer_edges_html(graph))
-    out = out.replace("{{LAYERS_HTML}}", _layer_summary_html(graph))
     out = out.replace("{{LEGEND_HTML}}", _legend_html(graph))
     out = out.replace("{{LAYER_TABS_HTML}}", _layer_tabs_html(graph))
     out = out.replace("{{TOP_NODES_HTML}}", _top_nodes_html(graph))
