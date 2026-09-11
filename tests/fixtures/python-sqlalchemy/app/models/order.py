@@ -9,3 +9,4 @@ class Order(Base):
 
     id = Column(Integer, primary_key=True)
     store_no = Column(String(32))
+    status = Column(String(16))

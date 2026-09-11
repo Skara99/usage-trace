@@ -1,7 +1,7 @@
 {
   "name": "usage-trace",
-  "version": "0.2.0+codex.20260722220000",
-  "description": "Trace keyword usage, call chains, and database tables in Java/Spring, Python, or C# with an offline HTML report. Auto-trigger for prompts like 分析当前项目的 orderId, 查找字段使用情况, 追踪调用链, 字段流向.",
+  "version": "0.3.0+codex.20260911000000",
+  "description": "Trace keyword usage, call chains, and database tables in Java/Spring, Python, or C# with an offline HTML report, plus a field-regression pipeline (business scenarios, API test cases, seed SQL release files). Auto-trigger for prompts like 分析当前项目的 orderId, 查找字段使用情况, 追踪调用链, 字段流向, 生成字段用例, 字段回归, 打通上线SQL.",
   "author": {
     "name": "ddsyw",
     "url": "https://github.com/ddsyw"
@@ -17,13 +17,15 @@
     "字段使用情况",
     "调用链追踪",
     "分析当前项目",
-    "codex-plugin"
+    "codex-plugin",
+    "字段回归",
+    "生成字段用例"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "usage-trace",
-    "shortDescription": "Trace field usage / call chains / DB tables. Triggers: 分析当前项目的 orderId, 查找字段使用情况, 调用链追踪.",
-    "longDescription": "Install once via marketplace plugin. When the user says things like 分析当前项目的 orderId or Trace storeNo usage, load the skill, ensure the usage-trace CLI is available (pip install from GitHub if needed), and generate a single offline HTML report with usage sites, call chain, and database tables. 支持中文：分析当前项目、查找字段使用情况、追踪调用链、字段流向分析。",
+    "shortDescription": "Trace field usage / call chains / DB tables + field regression pipeline. Triggers: 分析当前项目的 orderId, 查找字段使用情况, 生成字段用例, 字段回归, 打通上线SQL.",
+    "longDescription": "Install once via marketplace plugin. When the user says things like 分析当前项目的 orderId or Trace storeNo usage, load the skill, ensure the usage-trace CLI is available (pip install from GitHub if needed), and generate a single offline HTML report with usage sites, call chain, and database tables. For field-regression prompts like 给 storeNo 生成回归用例 or 打通上线SQL, the field-regression skill turns the chain JSON into business scenarios, API test cases, idempotent seed SQL release files, and triggers the apifox skill for automated regression. 支持中文：分析当前项目、查找字段使用情况、追踪调用链、字段流向分析、生成字段用例、字段回归、打通上线SQL。",
     "developerName": "ddsyw",
     "category": "Productivity",
     "capabilities": [
@@ -37,7 +39,9 @@
       "追踪 userId 的调用链和涉及的数据库表",
       "Trace orderId usage in the current project",
       "Analyze storeNo call chain and related tables",
-      "where is userId used and which tables does it touch?"
+      "where is userId used and which tables does it touch?",
+      "给 storeNo 生成回归用例并打通上线SQL",
+      "字段回归 orderId 并自动回归接口用例"
     ],
     "brandColor": "#2563EB"
   }

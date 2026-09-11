@@ -150,3 +150,63 @@ def test_main_writes_report_from_args(fixture_root, tmp_path, monkeypatch):
 
     assert out.exists()
     assert "t_order" in out.read_text(encoding="utf-8")
+
+
+def test_run_writes_chain_json_by_default(fixture_root, tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.chdir(tmp_path)
+
+    run("storeNo", fixture_root)
+
+    chain = tmp_path / ".usage-trace" / "storeNo-chain.json"
+    assert chain.exists()
+    payload = json.loads(chain.read_text(encoding="utf-8"))
+    assert payload["keyword"] == "storeNo"
+    assert payload["meta"]["language"] == "java-spring"
+    assert payload["counts"]["usages"] > 0
+    assert payload["counts"]["tables"] >= 1
+    assert payload["counts"]["field_columns"] >= 1
+    hit = next(c for c in payload["field_columns"]
+               if c["table"] == "t_order" and c["column"] == "store_no")
+    assert hit["source"] == "mybatis_xml"
+    assert any(u.get("file") for u in payload["usages"])
+    assert any(n.get("kind") == "table" for n in payload["nodes"])
+    assert payload["edges"]
+    assert any(st.get("linked") for st in payload["db_statements"])
+    tnode = next(n for n in payload["nodes"] if n.get("kind") == "table")
+    names = [c["name"] for c in tnode.get("columns") or []]
+    assert "store_no" in names
+    assert "id" in names
+    assert tnode.get("matched_columns") == ["store_no"]
+    assert "t_order" in payload.get("table_schemas", {})
+
+
+def test_json_out_custom_path(fixture_root, tmp_path):
+    import json
+
+    out = tmp_path / "custom-chain.json"
+
+    run("storeNo", fixture_root, json_out=out)
+
+    assert out.exists()
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["keyword"] == "storeNo"
+    assert payload["field_columns"]
+
+
+def test_main_supports_json_out_arg(fixture_root, tmp_path, monkeypatch):
+    import json
+
+    out = tmp_path / "chain.json"
+    monkeypatch.setattr(sys, "argv", [
+        "usage_trace.py",
+        "--keyword", "storeNo",
+        "--root", str(fixture_root),
+        "--json-out", str(out),
+    ])
+
+    main()
+
+    assert out.exists()
+    assert json.loads(out.read_text(encoding="utf-8"))["keyword"] == "storeNo"

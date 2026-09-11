@@ -22,6 +22,12 @@ def _fixture_graph():
         "op": "select",
         "source_files": ["src/main/resources/mapper/OrderMapper.xml"],
         "sql_snippet": "SELECT * FROM t_order WHERE store_no = #{storeNo}",
+        "columns": [
+            {"name": "id", "type": "bigint", "matched": False, "source": "ddl"},
+            {"name": "store_no", "type": "varchar(32)", "matched": True, "source": "ddl"},
+            {"name": "status", "type": "varchar(16)", "matched": False, "source": "ddl"},
+        ],
+        "matched_columns": ["store_no"],
     })
     g["db_statements"] = [{
         "source": "mybatis_xml",
@@ -31,6 +37,15 @@ def _fixture_graph():
         "tables": ["t_order"],
         "sql": "SELECT * FROM t_order WHERE store_no = #{storeNo}",
         "linked": True,
+    }]
+    g["field_columns"] = [{
+        "table": "t_order",
+        "column": "store_no",
+        "op": "select",
+        "source": "mybatis_xml",
+        "statement_id": "OrderMapper.selectByStoreNo",
+        "sql": "SELECT * FROM t_order WHERE store_no = #{storeNo}",
+        "file": "src/main/resources/mapper/OrderMapper.xml",
     }]
     add_edge(g, a, b)
     add_edge(g, b, c)
@@ -341,3 +356,14 @@ def test_display_lines_breaks_camel_case():
     assert lines == ["queryListByEntryNameAnd", "StoreNo"]
     # hard mid-token split (old behavior) is gone
     assert not any(line.startswith("tore") for line in lines)
+
+
+def test_tables_html_shows_all_columns_and_matched_name():
+    html = render(_fixture_graph(), "storeNo",
+                  {"project": "demo", "language": "java-spring"}, TMPL)
+    assert "当前字段列名" in html
+    assert "表内全部字段" in html
+    assert "hit-col" in html
+    assert "store_no" in html
+    assert "status" in html
+    assert "对应列名" in html

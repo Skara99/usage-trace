@@ -8,8 +8,9 @@ Thin multi-platform plugin wrapper used by the repo marketplaces:
 | Claude Code | `.claude-plugin/marketplace.json` | `.claude-plugin/plugin.json` |
 | Cursor | `.cursor-plugin/marketplace.json` | `.cursor-plugin/plugin.json` |
 
-Ships the **skill** at `skills/usage-trace/SKILL.md`.
-Keep this copy in sync with repository root `skills/usage-trace/SKILL.md`.
+Ships skills at `skills/usage-trace/SKILL.md` and
+`skills/field-regression/SKILL.md`. Keep both in sync with repository root
+`skills/*/SKILL.md`.
 
 ### End-user install
 

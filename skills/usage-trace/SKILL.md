@@ -26,12 +26,17 @@ Typical keywords: `orderId`, `storeNo`, `store_no`, `userId`, and similar busine
 
 ## What It Does
 
-Runs the local `usage-trace` CLI against a project and writes **one offline HTML report** with:
+Runs the local `usage-trace` CLI against a project and writes **one offline HTML
+report** plus **one chain JSON**:
 
 - matched usage sites (with naming variants)
 - caller/callee call chain
-- involved database tables (when resolvable for the language/ORM)
-- interactive graph dashboard (layer columns → class groups → methods)
+- involved database tables and full column lists when resolvable
+- field → table.column mapping (`field_columns`)
+- related enums/constants with values, Chinese labels, usage scenarios, triggers
+- chain scenarios (what each main path does, entry API, tables)
+- interactive graph dashboard (layer columns → class groups → methods;
+  resizable panes; 资深/初级/PM personas)
 - table / statement diagnostics and SQL snippets when resolvable
 
 Supported profiles:
@@ -49,6 +54,7 @@ Supported profiles:
 | `keyword` | yes | — | field / identifier extracted from the user message, e.g. `orderId` |
 | `root` | yes | `.` when the user says current project / 当前项目 | project root |
 | `output` | no | `.usage-trace/<keyword>-report.html` | relative to cwd |
+| `json-out` | no | `.usage-trace/<keyword>-chain.json` | machine-readable chain |
 | `depth` | no | `4` | hard-capped in CLI |
 | `profile` | no | `auto` | see supported profiles above |
 | `max-nodes` | no | `300` | graph node cap |
@@ -108,12 +114,14 @@ usage-trace --keyword orderId --root . --out .usage-trace/orderId-report.html
 3. Set `root` to `.` when the user says current project / 当前项目 / this repo; otherwise use the path they give.
 4. Ensure the CLI is available (section above).
 5. Run `usage-trace --keyword ... --root ... --profile auto --depth 4`.
-6. Confirm the HTML report exists (default `.usage-trace/<keyword>-report.html`).
+6. Confirm the HTML report exists (default `.usage-trace/<keyword>-report.html`)
+   and the chain JSON (default `.usage-trace/<keyword>-chain.json`).
 7. Summarize for the user:
    - major usage sites
-   - main call-chain path (entry → service → repository/data → table when present)
-   - involved tables / SQL when present
-   - report file path
+   - main call-chain path / 链路场景 (entry → service → repository/data → table)
+   - involved tables, matched columns, and table schemas when present
+   - enum/constant values and how each value is triggered, when present
+   - report file path and chain JSON path
 
 ## Notes
 

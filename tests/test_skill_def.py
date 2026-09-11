@@ -121,3 +121,56 @@ def test_paired_plugin_manifests_stay_in_sync():
         assert root["name"] == thin["name"]
         assert root["version"] == thin["version"]
         assert root["description"] == thin["description"]
+
+# ---- field-regression skill (v0.3.0 pipeline) ----
+
+FR_SKILL = ROOT / "skills" / "field-regression" / "SKILL.md"
+FR_THIN_SKILL = ROOT / "plugins" / "usage-trace" / "skills" / "field-regression" / "SKILL.md"
+
+FR_TRIGGER_PHRASES = [
+    "生成字段用例",
+    "字段回归",
+    "打通上线SQL",
+    "生成造数SQL",
+    "create field regression cases",
+]
+
+FR_CONTRACT_NEEDLES = [
+    "chain.json",
+    "scenarios.yaml",
+    "cases/",
+    "oss/",
+    "db_seed",
+    "field_columns",
+    "apifox",
+    "NOT EXISTS",
+    "usage-trace --keyword",
+    "db_backed",
+]
+
+
+def test_field_regression_skill_exists_with_frontmatter():
+    text = FR_SKILL.read_text(encoding="utf-8")
+    assert text.startswith("---\n")
+    assert "name: field-regression" in text
+    for phrase in FR_TRIGGER_PHRASES:
+        assert phrase in text, f"field-regression skill missing trigger: {phrase}"
+
+
+def test_field_regression_skill_defines_pipeline_contract():
+    text = FR_SKILL.read_text(encoding="utf-8")
+    for needle in FR_CONTRACT_NEEDLES:
+        assert needle in text, f"field-regression skill missing contract: {needle}"
+    # degradation path must exist
+    assert "db_backed: false" in text
+
+
+def test_field_regression_skill_copies_stay_in_sync():
+    assert FR_SKILL.read_text(encoding="utf-8") == FR_THIN_SKILL.read_text(encoding="utf-8")
+
+
+def test_field_regression_skill_listed_in_plugin_skills_dir():
+    # marketplace plugins point skills at ./skills/; the thin wrapper must ship it
+    thin_skills = ROOT / "plugins" / "usage-trace" / "skills"
+    assert (thin_skills / "field-regression" / "SKILL.md").is_file()
+    assert (thin_skills / "usage-trace" / "SKILL.md").is_file()

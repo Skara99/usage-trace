@@ -538,3 +538,154 @@ def test_mybatis_plus_basemapper_links_table(tmp_path, profiles_dir):
         e.get("to") == "table:t_entry" and e.get("from") == "EntryService.find"
         for e in g["edges"]
     )
+
+
+def test_field_columns_maps_store_no_to_t_order(fixture_root, profiles_dir):
+    from discover import keyword_variants
+
+    profile = load_profile("java-spring", profiles_dir)
+    idx = _build_index(fixture_root, profile)
+    usages = discover("storeNo", profile, None, idx)
+    g = trace(usages, idx, profile, 4)
+    g = resolve_tables(g, idx, profile, keyword_variants("storeNo"))
+
+    cols = g["field_columns"]
+    assert cols, "expected field_columns hits for storeNo"
+    hit = next(c for c in cols if c["table"] == "t_order" and c["column"] == "store_no")
+    assert hit["source"] == "mybatis_xml"
+    assert hit["op"] == "select"
+    assert "store_no" in hit["sql"]
+    assert hit["statement_id"]
+    assert hit["file"]
+
+
+def test_field_columns_absent_without_variants(fixture_root, profiles_dir):
+    profile = load_profile("java-spring", profiles_dir)
+    idx = _build_index(fixture_root, profile)
+    usages = discover("storeNo", profile, None, idx)
+    g = trace(usages, idx, profile, 4)
+    g = resolve_tables(g, idx, profile)
+
+    assert g["field_columns"] == []
+
+
+def test_field_columns_filters_generic_variants(tmp_path):
+    from tables import _detect_field_columns
+
+    statements = [{
+        "source": "raw_sql", "file": "q.sql", "statement_id": "q",
+        "op": "select", "tables": ["t_order"],
+        "sql": "SELECT id, order_no FROM t_order WHERE order_no = 'x'",
+        "linked": True,
+    }]
+    # generic single-part keyword 'order' still matches physical column order_no?
+    # 'order' alone is a SQL keyword risk -> filtered by stopwords only for pure
+    # generic words; compound 'orderNo' passes and maps to order_no.
+    hits = _detect_field_columns(statements, ["orderNo", "order_no", "ORDERNO"])
+    assert any(c["column"] == "order_no" and c["table"] == "t_order" for c in hits)
+
+    hits_generic = _detect_field_columns(statements, ["name"])
+    assert hits_generic == []
+
+
+def test_table_schema_from_ddl_and_marks_matched_column(fixture_root, profiles_dir):
+    from discover import keyword_variants
+
+    profile = load_profile("java-spring", profiles_dir)
+    idx = _build_index(fixture_root, profile)
+    usages = discover("storeNo", profile, None, idx)
+    g = trace(usages, idx, profile, 4)
+    g = resolve_tables(g, idx, profile, keyword_variants("storeNo"))
+
+    t = next(n for n in g["nodes"] if n.get("kind") == "table" and n["table"] == "t_order")
+    names = [c["name"] for c in t["columns"]]
+    assert names == ["id", "order_no", "store_no", "status"]
+    hit = next(c for c in t["columns"] if c["name"] == "store_no")
+    assert hit["matched"] is True
+    assert t["matched_columns"] == ["store_no"]
+    assert "t_order" in g["table_schemas"]
+
+
+def test_table_schema_from_jpa_entity_fields(tmp_path, profiles_dir):
+    java_dir = tmp_path / "src/main/java/com/example"
+    (java_dir / "entity").mkdir(parents=True)
+    (java_dir / "repository").mkdir(parents=True)
+    (java_dir / "entity/OrderEntity.java").write_text(
+        """package com.example.entity;
+
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
+import jakarta.persistence.Column;
+
+@Entity
+@Table(name = "t_order")
+public class OrderEntity {
+    private Long id;
+    @Column(name = "store_no")
+    private String storeNo;
+    private String status;
+}
+""",
+        encoding="utf-8",
+    )
+    (java_dir / "repository/OrderRepository.java").write_text(
+        """package com.example.repository;
+import com.example.entity.OrderEntity;
+import org.springframework.data.jpa.repository.JpaRepository;
+public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
+    Object findByStoreNo(String storeNo);
+}
+""",
+        encoding="utf-8",
+    )
+    from discover import keyword_variants
+    profile = load_profile("java-spring", profiles_dir)
+    g = new_graph({})
+    add_node(g, {
+        "id": "OrderRepository.findByStoreNo",
+        "kind": "unit",
+        "label": "OrderRepository.findByStoreNo",
+        "layer": "Repository",
+    })
+    idx = _build_index(tmp_path, profile)
+    resolve_tables(g, idx, profile, keyword_variants("storeNo"))
+    t = next(n for n in g["nodes"] if n.get("kind") == "table")
+    names = {c["name"] for c in t["columns"]}
+    assert "store_no" in names
+    assert "id" in names
+    assert "status" in names
+    assert any(c["name"] == "store_no" and c["matched"] for c in t["columns"])
+
+
+def test_sqlalchemy_model_and_table_ctor_columns():
+    from tables import _parse_sqlalchemy_columns
+
+    text = '''
+from sqlalchemy import Column, String, Integer, Table, MetaData
+from sqlalchemy.orm import Mapped, mapped_column, declarative_base
+Base = declarative_base()
+
+class Order(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key=True)
+    store_no = Column(String(32))
+    status = Column(String(16))
+
+class Ticket(Base):
+    __tablename__ = "tickets"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    store_no: Mapped[str] = mapped_column(String(32))
+
+metadata = MetaData()
+items = Table(
+    "items",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("store_no", String(32)),
+)
+'''
+    schemas = {}
+    _parse_sqlalchemy_columns(text, schemas)
+    assert {c["name"] for c in schemas["orders"]} >= {"id", "store_no", "status"}
+    assert {c["name"] for c in schemas["tickets"]} >= {"id", "store_no"}
+    assert {c["name"] for c in schemas["items"]} >= {"id", "store_no"}

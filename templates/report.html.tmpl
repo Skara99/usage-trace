@@ -126,9 +126,23 @@
   .persona-btn.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:700}
   .ni-summary .notes{margin:0}
   .ni-rel .link-list code{display:inline-block;background:var(--code);border-radius:4px;padding:2px 6px;font-size:var(--fs-base)}
-  main{display:grid;grid-template-columns:270px minmax(0,1fr) 360px;min-height:0}
+  main{display:grid;grid-template-columns:var(--left-w,270px) 6px minmax(0,1fr) 6px var(--right-w,420px);min-height:0}
   aside,.details{min-height:0;overflow:auto;background:var(--panel);border-right:1px solid var(--line)}
-  .details{border-right:0;border-left:1px solid var(--line)}
+  .details{border-right:0;border-left:0}
+  .resizer{
+    width:6px;cursor:col-resize;background:var(--line);position:relative;z-index:4;
+    transition:background .15s;
+  }
+  .resizer:hover,.resizer.dragging{background:var(--accent)}
+  .resizer:after{
+    content:"";position:absolute;top:50%;left:1px;width:4px;height:36px;margin-top:-18px;
+    border-radius:var(--r-pill);background:var(--line-strong);
+  }
+  .resizer:hover:after,.resizer.dragging:after{background:var(--panel)}
+  body.resizing{cursor:col-resize;user-select:none}
+  body.resizing iframe,body.resizing svg{pointer-events:none}
+  .enum-head{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0 4px}
+  .enum-head .muted{font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.04em}
   .panel-section{padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--line)}
   .label{font-size:var(--fs-xs);text-transform:uppercase;color:var(--muted);font-weight:700;letter-spacing:.05em;margin-bottom:9px}
   .search-wrap{display:flex;gap:var(--sp-2)}
@@ -208,6 +222,10 @@
   .field{margin:10px 0}
   .field b{display:block;font-size:var(--fs-xs);color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px}
   .field code,code{background:var(--code);border-radius:4px;padding:2px 5px;font-size:var(--fs-base)}
+  .col-chip{display:inline-flex;align-items:center;gap:4px;margin:2px 4px 2px 0;white-space:nowrap}
+  .col-chip .col-type,.col-chip .col-field{color:var(--muted);font-size:var(--fs-xs);font-weight:400}
+  .col-chip .col-field::before{content:"→";margin-right:2px;opacity:.6}
+  code.hit-col,.col-chip.hit-col{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent);font-weight:700}
   .field pre{margin:0;white-space:pre-wrap;word-break:break-word;background:var(--code);border-radius:var(--r);padding:9px;font-size:var(--fs-base);line-height:1.45;max-height:180px;overflow:auto;color:var(--ink)}
   .link-list{display:flex;flex-direction:column;gap:6px}
   .link-list button{border:1px solid var(--line);background:var(--panel);border-radius:var(--r);padding:7px 8px;text-align:left;cursor:pointer;font-size:var(--fs-base);transition:border-color .15s,background .15s}
@@ -228,6 +246,7 @@
   .path-step:last-child:before{display:none}
   .path-step em{display:block;color:var(--muted);font-style:normal;font-size:var(--fs-xs);text-transform:uppercase}
   .path-step strong{display:block;font-size:var(--fs-base);line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .path-purpose{display:block;color:var(--accent);font-size:var(--fs-sm);font-weight:600;line-height:1.35;margin-bottom:4px}
   .tour-list{display:flex;flex-direction:column;gap:7px}
   .tour-step{
     width:100%;border:1px solid var(--line);border-radius:var(--r);background:var(--panel);padding:8px;
@@ -300,6 +319,7 @@
     .topbar-legend{flex:1 1 100%}
     main{display:block}
     aside,.details{border:0;border-bottom:1px solid var(--line)}
+    .resizer{display:none}
     .graph-stage{height:62vh;min-height:420px}
   }
 </style>
@@ -322,8 +342,8 @@
     <div id="persona-group" class="persona-group" role="group" aria-label="读者视角"></div>
     <button id="theme-toggle" type="button" class="theme-toggle" title="切换浅色 / 深色主题" aria-label="切换主题">主题</button>
   </div>
-  <main>
-    <aside>
+  <main id="workspace">
+    <aside id="nav-pane">
       <section class="panel-section">
         <div class="label">主路径</div>
         <div class="path-list">{{MAIN_PATHS_HTML}}</div>
@@ -353,6 +373,7 @@
       </section>
       <section class="panel-section notes">{{NOTES}}</section>
     </aside>
+    <div class="resizer" id="resize-left" role="separator" aria-orientation="vertical" aria-label="调整左侧栏宽度" title="拖拽调整左侧栏，双击重置"></div>
     <section class="graph-stage">
       <div class="toolbar" aria-label="Graph controls">
         <button type="button" id="view-main" class="mode-button" title="只突出主路径">主路径</button>
@@ -365,13 +386,26 @@
         {{SVG}}
       </div>
     </section>
-    <aside class="details">
+    <div class="resizer" id="resize-right" role="separator" aria-orientation="vertical" aria-label="调整右侧栏宽度" title="拖拽调整右侧栏，双击重置"></div>
+    <aside class="details" id="details-pane">
       <section id="node-details" class="panel-section"></section>
       <section class="panel-section">
         <details>
           <summary>网络全景</summary>
           {{PANORAMA_SVG}}
         </details>
+      </section>
+      <section class="panel-section">
+        <div class="label">链路场景</div>
+        {{SCENARIOS_HTML}}
+      </section>
+      <section class="panel-section">
+        <div class="label">枚举 / 固定取值</div>
+        {{ENUMS_HTML}}
+      </section>
+      <section class="panel-section">
+        <div class="label">字段 → 表列</div>
+        {{FIELD_COLUMNS_HTML}}
       </section>
       <section class="panel-section">
         <div class="label">涉及表</div>
@@ -551,9 +585,24 @@
     const statements = node.statement_ids || [];
     const sources = node.source_files || [];
     const sql = node.sql_snippet ? `<pre>${esc(node.sql_snippet)}</pre>` : '<span class="muted">无 SQL 片段</span>';
+    const cols = Array.isArray(node.columns) ? node.columns : [];
+    const colHtml = cols.length
+      ? cols.map((col) => {
+          const hit = col.matched ? " col-chip hit-col" : " col-chip";
+          const typ = col.type ? `<span class="col-type">${esc(col.type)}</span>` : "";
+          const field = col.field ? `<span class="col-field">${esc(col.field)}</span>` : "";
+          return `<code class="${hit}">${esc(col.name || "")}${typ}${field}</code>`;
+        }).join(" ")
+      : '<span class="muted">未解析到表字段</span>';
+    const matched = (node.matched_columns || cols.filter((c) => c.matched).map((c) => c.name));
+    const matchedHtml = matched.length
+      ? matched.map((name) => `<code class="hit-col">${esc(name)}</code>`).join(" ")
+      : '<span class="muted">—</span>';
     return `
       <div class="field"><b>表详情</b>
         <div class="table-detail-grid">
+          <div class="field"><b>当前字段列名</b>${matchedHtml}</div>
+          <div class="field"><b>表内全部字段</b>${colHtml}</div>
           <div class="field"><b>访问操作</b>${listItems(ops)}</div>
           <div class="field"><b>Statement</b>${listItems(statements)}</div>
           <div class="field"><b>来源文件</b>${listItems(sources)}</div>
@@ -629,8 +678,12 @@
       node.layer ? `<span class="badge">${esc(node.layer)}</span>` : "",
       complexityBadge(node),
       node.table ? `<span class="badge">table ${esc(node.table)}</span>` : "",
-      node.op ? `<span class="badge">${esc(node.op)}</span>` : ""
+      node.op ? `<span class="badge">${esc(node.op)}</span>` : "",
+      node.api ? `<span class="badge">${esc(node.api)}</span>` : ""
     ].join("");
+    const zh = node.title_zh ? `<div class="field"><b>中文含义</b><p class="notes">${esc(node.title_zh)}</p></div>` : "";
+    const purpose = node.purpose && node.purpose !== node.title_zh
+      ? `<div class="field"><b>作用</b><p class="notes">${esc(node.purpose)}</p></div>` : "";
     const usages = (node.usages || []).map((usage) =>
       `<div class="field"><b>${esc(usage.file || "")}:${esc(usage.line || "")}</b><pre>${esc(usage.snippet || "")}</pre></div>`
     ).join("");
@@ -642,8 +695,9 @@
     const sourceFileBlock = sourceFiles ? `<div class="field"><b>Source files</b>${sourceFiles}</div>` : "";
     const tableDetails = renderTableDetails(node);
     details.innerHTML = `
-      <h2>${esc(node.label || node.id)}</h2>
+      <h2>${esc(node.display_name || node.label || node.id)}</h2>
       <div class="badge-row">${badges}${tagChips(node)}</div>
+      ${zh}${purpose}
       ${summaryBlock(node)}
       ${relatedTablesBlock(id)}
       <div class="field ni-rel"><b>调用 (callees)</b><div class="link-list">${relLinkList(id, "out")}</div></div>
@@ -879,6 +933,52 @@
     if (v) savedTheme = v;
   } catch (_){}
   applyTheme(savedTheme);
+
+  const workspace = document.getElementById("workspace");
+  function bindResizer(handle, cssVar, storageKey, defaults){
+    if (!handle || !workspace) return;
+    const min = defaults.min, max = defaults.max, fallback = defaults.value;
+    function current(){
+      const raw = getComputedStyle(workspace).getPropertyValue(cssVar).trim();
+      const n = parseFloat(raw);
+      return Number.isFinite(n) ? n : fallback;
+    }
+    function apply(px, persist){
+      const width = Math.max(min, Math.min(max, Math.round(px)));
+      workspace.style.setProperty(cssVar, width + "px");
+      if (persist) {
+        try { localStorage.setItem(storageKey, String(width)); } catch (_){}
+      }
+    }
+    try {
+      const saved = parseFloat(localStorage.getItem(storageKey) || "");
+      if (Number.isFinite(saved)) apply(saved, false);
+    } catch (_){}
+    handle.addEventListener("dblclick", () => apply(fallback, true));
+    handle.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      handle.classList.add("dragging");
+      document.body.classList.add("resizing");
+      const startX = ev.clientX;
+      const startW = current();
+      const dir = defaults.dir || 1;
+      function move(e){ apply(startW + (e.clientX - startX) * dir, false); }
+      function up(e){
+        apply(startW + (e.clientX - startX) * dir, true);
+        handle.classList.remove("dragging");
+        document.body.classList.remove("resizing");
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+      }
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    });
+  }
+  bindResizer(document.getElementById("resize-left"), "--left-w", "usage-trace-left-w",
+              {min: 180, max: 480, value: 270, dir: 1});
+  bindResizer(document.getElementById("resize-right"), "--right-w", "usage-trace-right-w",
+              {min: 280, max: Math.max(480, Math.floor(window.innerWidth * 0.7)), value: 420, dir: -1});
 
   setViewBox();
   applyMainPathView();
