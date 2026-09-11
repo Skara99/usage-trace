@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "usage-trace"
-version = "0.2.0"
+version = "0.3.0"
 description = "Trace keyword usage, call chains, and database tables in Java/Spring, Python, and C# projects."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,7 +27,7 @@ usage-trace = "usage_trace:main"
 codex-find = "usage_trace:main"
 
 [tool.setuptools]
-py-modules = ["usage_trace", "codex_find", "common", "discover", "graph", "render", "tables", "trace", "understand_rules", "index", "parsing"]
+py-modules = ["usage_trace", "codex_find", "common", "discover", "enums", "graph", "render", "semantics", "tables", "trace", "understand_rules", "index", "parsing"]
 
 [tool.setuptools.package-dir]
 "" = "src"

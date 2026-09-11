@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.3.0 — 2026-09-11
+
+### Highlights
+- **Field-regression pipeline**: new `field-regression` skill turns field analysis into
+  regression assets — business scenarios (`scenarios.yaml`), per-scenario API cases with
+  DB seed data (`cases/*.json`), idempotent seed SQL release files (`oss/*_seed.sql`),
+  and triggers the apifox skill for automated API regression.
+
+### CLI
+- `usage-trace` now also writes a machine-readable chain JSON
+  (default `.usage-trace/<keyword>-chain.json`, override with `--json-out`)
+- Column-level field→table mapping: `field_columns` in chain JSON and graph
+- Table schema extraction (`table_schemas` / node `columns`): DDL `CREATE TABLE`,
+  JPA/`@TableName` fields, SQLAlchemy `Column`/`mapped_column`/`Mapped[]`/`Table()`,
+  EF Core properties, INSERT column lists
+- Enum / constant detection (`src/enums.py`): Java/Python/C# enums, Chinese labels
+  from constructor args, per-value usage sites (if / switch / assignment) and
+  trigger/scenario text (`src/semantics.py`)
+- Method/API Chinese titles from Javadoc, `//` / `#` comments, Python docstrings,
+  and Spring/HTTP mappings; chain-scenario purpose on main paths
+
+### Report
+- Panels: 链路场景, 字段 → 表列, 涉及表 (all columns + highlighted match),
+  枚举 / 固定取值 (label + usage scenario + trigger)
+- Graph nodes show method or `GET /path` plus Chinese title when known
+- Drag-to-resize left/right panes (double-click splitter to reset)
+- Persona switcher documented: 资深 / 初级 / PM (NodeInfo detail only)
+
+### Packaging & ops
+- Plugin manifests bumped to `0.3.0` with new triggers (生成字段用例, 字段回归, 打通上线SQL)
+- Plan doc: `docs/field-regression-plan.md`
+
 ## Unreleased
 
 ### Packaging & ops

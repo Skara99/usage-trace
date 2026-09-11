@@ -9,7 +9,7 @@
 分析当前项目的 orderId
 ```
 
-助手会 **自动匹配 skill**，必要时安装本地 CLI，并生成离线 HTML 报告（使用位置、调用链、相关表）。
+助手会 **自动匹配 skill**，必要时安装本地 CLI，并生成离线 HTML 报告（使用位置、调用链、相关表、列映射、链路场景、枚举取值）。
 
 ## 功能
 
@@ -17,7 +17,13 @@
 - 围绕命中方法构建调用链图。
 - 识别 Controller、Service、Repository、Entity、SQL、Table 等层级。
 - 解析多种数据库访问来源（MyBatis、JPA、SQLAlchemy、EF Core、原始 SQL、字符串 SQL 等）。
-- 生成单文件离线 HTML 报告，不依赖外部资源。
+- 列级映射：将关键字对应到物理表列（`field_columns`），并从 DDL / 实体 / ORM 抽出表的全部列（`table_schemas`）。
+- 识别相关枚举/常量（`field_enums`）：取值、中文含义、各值的使用场景与触发方式。
+- 从注释 / Javadoc / docstring / HTTP 映射推断方法中文含义和链路场景（`src/semantics.py`）。
+- 输出机器可读链路 JSON，供 `field-regression` 消费。
+- 字段回归流水线 skill：业务场景整理、按场景生成接口用例与造数数据、幂等造数 SQL
+  上线文件、触发 apifox skill 自动回归。
+- 生成单文件离线 HTML 报告（左右栏可拖拽伸缩；资深/初级/PM 视角），不依赖外部资源。
 - 通过 Codex / Claude Code / Cursor 插件市场安装；自然语言自动触发 skill。
 - 通过 `--profile auto` 支持 Java、Python、C#。
 - 兼容旧命令名 `codex-find`。
@@ -110,6 +116,9 @@ usage-trace --keyword <identifier> --root <project> [options]
 - `--max-nodes`：报告中最多渲染的图节点数量，默认 `300`。
 - `--variants`：额外关键字变体，逗号分隔。
 - `--out`：可选输出 HTML 路径，默认 `.usage-trace/<keyword>-report.html`。
+- `--json-out`：可选链路 JSON 路径，默认 `.usage-trace/<keyword>-chain.json`
+  （usages / graph / SQL / `field_columns` / `table_schemas` / `field_enums` /
+  `scenarios`，供 `field-regression` skill 消费）。
 
 兼容旧命令：
 
@@ -123,27 +132,68 @@ codex-find --keyword orderId --root /path/to/your/project
 
 - 命中使用位置数量和涉及表数量概览
 - 分层调用链 dashboard（主路径、层级 tab、搜索、聚焦上下游等）
-- Understand-Anything 风格图元数据
-- 使用位置明细与数据库表明细
-- MyBatis XML / SQL 诊断（若有）
-- 截断说明和推断边说明
+- 图节点：方法名或 HTTP 接口（如 `GET /api/orders`），有注释时第二行显示中文含义
+- **链路场景**：这条链做什么、入口接口、调用链、涉及表
+- **字段 → 表列**：关键字对应的物理列
+- **涉及表**：表内全部字段，当前追踪列高亮
+- **枚举 / 固定取值**：名称、取值、中文含义、使用场景、如何触发（if / switch / 赋值）
+- 左右侧栏可拖拽伸缩（双击分隔条重置）
+- 视角切换（资深 / 初级 / PM）只影响右侧节点详情详略
+- 使用位置明细、SQL 诊断、截断/推断边说明
 
 报告是单个离线 HTML 文件，不需要联网或额外静态资源。
+
+### 视角（资深 / 初级 / PM）
+
+只改变**右侧节点详情**，不改调用链图：
+
+| | 资深（默认） | 初级 | PM |
+|---|---|---|---|
+| 概要 / 中文含义 / 作用 | 有 | 有 | 有 |
+| 关联表 / SQL | 有 | 有 | 有 |
+| 调用 / 被调用 | 可点击跳转 | 只显示名字 | 隐藏 |
+| 方法源码 | 有 | 有 | 隐藏 |
+| 复杂度 | `simple/moderate/complex` | `简单/中等/复杂` | 隐藏 |
 
 ## 支持范围
 
 - Java/Spring：关键字、分层、MyBatis、JPA、原始/字符串 SQL
 - 普通 Java：关键字、调用链、包路径分层、MyBatis XML、原始/字符串 SQL
-- Python（SQLAlchemy / generic）：关键字与调用链、`__tablename__` / `Table()` 等
-- C#（EF Core / generic）：关键字与调用链、`[Table]` / `ToTable` / `DbSet` 等
+- Python（SQLAlchemy / generic）：关键字与调用链、`__tablename__` / `Table()` /
+  `Column()` / `mapped_column` / `Mapped[]`、Python `Enum`
+- C#（EF Core / generic）：关键字与调用链、`[Table]` / `ToTable` / `DbSet`、`enum` 取值
 
 ## 调试流水线
 
 1. `src/discover.py`：发现关键字使用位置  
 2. `src/trace.py`：构建调用链图  
-3. `src/tables.py`：解析数据库表  
+3. `src/tables.py`：解析数据库表、列与表结构  
 4. `src/graph.py`：裁剪和布局图节点  
-5. `src/render.py`：生成离线 HTML 报告  
+5. `src/enums.py` + `src/semantics.py`：枚举取值、中文含义、链路场景  
+6. `src/render.py`：生成离线 HTML 报告，并写出 `*-chain.json`  
+
+## 字段回归流水线（v0.3.0）
+
+`field-regression` skill（随同一插件分发）把字段分析结果变成回归资产，
+自然语言触发：
+
+```text
+给 storeNo 生成回归用例并打通上线SQL
+```
+
+流水线：
+
+1. `usage-trace` 输出 `<keyword>-chain.json`，含 `field_columns`
+   （字段 → 表.列 的证据）
+2. Agent 整理业务场景 → `.usage-trace/<keyword>/scenarios.yaml`
+3. Agent 按场景生成接口用例（含 `db_seed` 造数行）→
+   `.usage-trace/<keyword>/cases/*.json`
+4. 组装幂等造数 SQL 上线文件（OSS 上线文件）→
+   `.usage-trace/<keyword>/oss/YYYYMMDD_<keyword>_<table>_seed.sql`
+5. 触发已有的 apifox skill 自动回归，并写出 `regression-result.json`
+
+`field_columns` 为空时降级：只生成接口级用例，不产出造数 SQL。
+设计文档：`docs/field-regression-plan.md`。
 
 ## 开发验证
 
@@ -187,6 +237,7 @@ plugins/usage-trace/               多平台 thin plugin
 profiles/                          分析 profile
 scripts/                           维护者脚本
 skills/usage-trace/SKILL.md        Skill 定义
+skills/field-regression/SKILL.md   字段回归流水线 skill
 src/                               CLI 与分析阶段
 templates/report.html.tmpl         离线报告模板
 tests/                             测试与示例项目

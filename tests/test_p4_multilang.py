@@ -55,6 +55,12 @@ def test_python_end_to_end_store_no():
     assert "OrderApi.get_order" in units
     assert "orders" in tables
     assert result["meta"]["profile"] == "python-sqlalchemy"
+    t = next(n for n in result["nodes"] if n.get("kind") == "table" and n["table"] == "orders")
+    names = [c["name"] for c in t.get("columns") or []]
+    assert "store_no" in names
+    assert "id" in names
+    assert "status" in names
+    assert t.get("matched_columns") == ["store_no"]
 
 
 def test_csharp_end_to_end_store_no():

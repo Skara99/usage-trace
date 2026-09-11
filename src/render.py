@@ -121,16 +121,23 @@ def _nodes_by_layer_and_class(nodes: list[dict], pos: dict[str, tuple[int, int]]
 
 
 def _node_label_lines(node: dict) -> list[str]:
-    """Node text inside a class frame: method / table name only (class is on the frame)."""
+    """Node text inside a class frame: method / API / Chinese title when known."""
     label = str(node.get("label", node["id"]))
-    if node.get("kind") == "unit" and node.get("group") and "." in label:
-        return _display_lines(label.rsplit(".", 1)[-1])
+    if node.get("kind") == "unit":
+        primary = node.get("api") or (
+            label.rsplit(".", 1)[-1] if node.get("group") and "." in label else label
+        )
+        lines = _display_lines(str(primary), 22)[:1]
+        extra = node.get("title_zh") or node.get("purpose") or ""
+        if extra and extra != primary:
+            lines.append(str(extra)[:22])
+        return lines[:2]
     if node.get("kind") != "table":
         return _display_lines(label)
     lines = _display_lines(label, 22)[:1]
-    op = node.get("op") or ",".join(node.get("ops") or [])
-    if op:
-        lines.append(str(op)[:24])
+    extra = node.get("title_zh") or node.get("op") or ",".join(node.get("ops") or [])
+    if extra:
+        lines.append(str(extra)[:24])
     return lines
 
 
@@ -268,7 +275,8 @@ def render_svg(graph: dict) -> str:
             f'data-node-id="{_attr(n["id"])}" data-label="{_attr(label)}" '
             f'transform="translate({x},{y})">'
         )
-        parts.append(f'<title>{_esc(label)}</title>')
+        tip = n.get("summary") or n.get("title_zh") or label
+        parts.append(f'<title>{_esc(tip)}</title>')
         parts.append(f'<rect width="{NODE_W}" height="{NODE_H}" rx="7"/>')
         lines = _node_label_lines(n)
         start_y = 20 if len(lines) == 1 else 16
@@ -315,6 +323,95 @@ def render_panorama_svg(graph: dict) -> str:
     return "".join(parts)
 
 
+def _col_chip(col: dict) -> str:
+    name = _esc(col.get("name", ""))
+    typ = f'<span class="col-type">{_esc(col.get("type", ""))}</span>' if col.get("type") else ""
+    field = f'<span class="col-field">{_esc(col.get("field", ""))}</span>' if col.get("field") else ""
+    cls = "col-chip hit-col" if col.get("matched") else "col-chip"
+    return f'<code class="{cls}">{name}{typ}{field}</code>'
+
+
+def _enum_usage_html(usages: list[dict]) -> str:
+    if not usages:
+        return '<p class="muted">未找到该取值的业务使用点</p>'
+    rows = "".join(
+        "<tr>"
+        f"<td>{_esc(u.get('scenario') or '—')}</td>"
+        f"<td>{_esc(u.get('trigger') or '—')}</td>"
+        f"<td><code>{_esc(u.get('method') or '')}</code></td>"
+        f"<td><code>{_esc(u.get('snippet') or '')}</code></td>"
+        "</tr>"
+        for u in usages[:8]
+    )
+    return ("<table><tr><th>使用场景</th><th>如何触发</th><th>所在方法</th><th>代码</th></tr>"
+            f"{rows}</table>")
+
+
+def _enums_html(graph: dict) -> str:
+    groups = graph.get("field_enums") or []
+    if not groups:
+        return "<p>未发现与该字段相关的枚举 / 固定取值</p>"
+    blocks: list[str] = []
+    for g in groups:
+        kind = {"enum": "枚举", "constants": "常量"}.get(g.get("kind"), g.get("kind") or "")
+        head = (
+            f'<div class="enum-head"><code>{_esc(g.get("name", ""))}</code>'
+            f'<span class="muted">{_esc(kind)}</span>'
+            f'<code>{_esc(g.get("file", ""))}</code></div>'
+        )
+        rows = "".join(
+            "<tr>"
+            f"<td><code>{_esc(v.get('name', ''))}</code></td>"
+            f"<td><code>{_esc(v.get('value', ''))}</code></td>"
+            f"<td>{_esc(v.get('label', '') or '—')}</td>"
+            f"<td>{_enum_usage_html(v.get('usages') or [])}</td>"
+            "</tr>"
+            for v in g.get("values") or []
+        )
+        blocks.append(
+            f"{head}<table><tr><th>名称</th><th>取值</th><th>中文含义</th><th>使用场景 / 触发</th></tr>"
+            f"{rows}</table>"
+        )
+    return "".join(blocks)
+
+
+def _scenarios_html(graph: dict) -> str:
+    rows = graph.get("scenarios") or []
+    if not rows:
+        return "<p>未整理出链路场景</p>"
+    body = "".join(
+        "<tr>"
+        f"<td>{_esc(s.get('title') or s.get('id') or '')}</td>"
+        f"<td>{_esc(s.get('purpose') or '—')}</td>"
+        f"<td><code>{_esc(s.get('entry') or '')}</code></td>"
+        f"<td><code>{_esc(s.get('chain') or '')}</code></td>"
+        f"<td><code>{_esc(s.get('table') or '')}</code></td>"
+        "</tr>"
+        for s in rows
+    )
+    return ("<table><tr><th>场景</th><th>这条链路做什么</th><th>入口 / 接口</th>"
+            "<th>调用链</th><th>表</th></tr>"
+            f"{body}</table>")
+
+
+def _field_columns_html(graph: dict) -> str:
+    cols = graph.get("field_columns") or []
+    if not cols:
+        return "<p>未发现该字段直接对应数据库列</p>"
+    body = "".join(
+        f"<tr><td><code>{_esc(c['table'])}</code></td>"
+        f"<td><code class=\"hit-col\">{_esc(c['column'])}</code></td>"
+        f"<td>{_esc(c.get('op', 'unknown'))}</td>"
+        f"<td>{_esc(_source_label(c.get('source')))}</td>"
+        f"<td><code>{_esc(c.get('statement_id', ''))}</code></td>"
+        f"<td><code>{_esc(c.get('sql', ''))[:160]}</code></td></tr>"
+        for c in cols
+    )
+    return ("<table><tr><th>表</th><th>对应列名</th><th>操作</th><th>来源</th>"
+            "<th>语句 ID</th><th>SQL 片段</th></tr>"
+            f"{body}</table>")
+
+
 def _tables_html(graph: dict) -> str:
     rows = [n for n in graph["nodes"] if n.get("kind") == "table"]
     candidates: dict[tuple[str, str, str], dict] = {}
@@ -340,8 +437,24 @@ def _tables_html(graph: dict) -> str:
             return "<p>无涉及表</p>"
     else:
         rows = [*rows, *candidates.values()]
+    def _cols_cell(n: dict) -> str:
+        cols = n.get("columns") or []
+        if not cols:
+            return '<span class="muted">未解析到表字段</span>'
+        return "".join(_col_chip(c) for c in cols)
+
+    def _matched_cell(n: dict) -> str:
+        names = n.get("matched_columns") or [
+            c["name"] for c in (n.get("columns") or []) if c.get("matched")
+        ]
+        if not names:
+            return '<span class="muted">—</span>'
+        return "".join(f'<code class="hit-col">{_esc(name)}</code>' for name in names)
+
     body = "".join(
         f"<tr><td><code>{_esc(n['table'])}</code></td>"
+        f"<td>{_matched_cell(n)}</td>"
+        f"<td>{_cols_cell(n)}</td>"
         f"<td>{_esc(n.get('op', 'unknown'))}</td>"
         f"<td>{_esc(n.get('status', '已连接'))}</td>"
         f"<td>{_esc(n.get('source_unit', ''))}</td>"
@@ -349,7 +462,8 @@ def _tables_html(graph: dict) -> str:
         f"<td><code>{_esc(n.get('sql_snippet', ''))[:160]}</code></td></tr>"
         for n in rows
     )
-    return ("<table><tr><th>表</th><th>操作</th><th>状态</th><th>访问单元</th>"
+    return ("<table><tr><th>表</th><th>当前字段列名</th><th>表内全部字段</th>"
+            "<th>操作</th><th>状态</th><th>访问单元</th>"
             "<th>来源文件</th><th>SQL 片段</th></tr>"
             f"{body}</table>")
 
@@ -485,10 +599,13 @@ def _main_paths_html(graph: dict) -> str:
             f'<strong>{_esc(label)}</strong></span>'
             for label, layer in zip(path["labels"], path["layers"])
         )
+        purpose = path.get("purpose") or path.get("title") or ""
+        extra = f'<span class="path-purpose">{_esc(purpose)}</span>' if purpose else ""
         lanes.append(
             f'<button type="button" class="path-lane" data-path-index="{i - 1}" '
             f'data-node-id="{_attr(path["nodes"][-1])}">'
-            f'<span class="path-rank">{i}</span><span class="path-chain">{steps}</span></button>'
+            f'<span class="path-rank">{i}</span>'
+            f'<span class="path-chain">{extra}{steps}</span></button>'
         )
     return "".join(lanes)
 
@@ -560,6 +677,8 @@ def _dashboard_graph_json(graph: dict) -> str:
         "layer_edges": graph.get("layer_edges", []),
         "main_paths": graph.get("main_paths", []),
         "tour": graph.get("tour", []),
+        "scenarios": graph.get("scenarios", []),
+        "field_enums": graph.get("field_enums", []),
     }
     return (
         json.dumps(payload, ensure_ascii=False)
@@ -588,6 +707,9 @@ def render(graph: dict, keyword: str, meta: dict, template_path: Path) -> str:
     out = out.replace("{{SVG}}", render_svg(graph))
     out = out.replace("{{PANORAMA_SVG}}", render_panorama_svg(graph))
     out = out.replace("{{TABLES_HTML}}", _tables_html(graph))
+    out = out.replace("{{FIELD_COLUMNS_HTML}}", _field_columns_html(graph))
+    out = out.replace("{{ENUMS_HTML}}", _enums_html(graph))
+    out = out.replace("{{SCENARIOS_HTML}}", _scenarios_html(graph))
     out = out.replace("{{DB_SOURCES_HTML}}", _db_sources_html(graph))
     out = out.replace("{{USAGES_HTML}}", _usages_html(graph))
     out = out.replace("{{MAIN_PATHS_HTML}}", _main_paths_html(graph))

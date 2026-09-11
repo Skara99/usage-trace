@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,9 +21,11 @@ def _prefer_local_modules() -> None:
 _prefer_local_modules()
 
 from common import load_profile, new_graph  # noqa: E402
-from discover import discover  # noqa: E402
+from discover import discover, keyword_variants  # noqa: E402
+from enums import detect_enums  # noqa: E402
 from graph import prune_and_layout  # noqa: E402
 from render import render  # noqa: E402
+from semantics import attach_semantics  # noqa: E402
 from tables import resolve_tables  # noqa: E402
 from trace import HARD_DEPTH_CAP, trace  # noqa: E402
 
@@ -115,9 +118,50 @@ def detect_profile_name(root: Path | str) -> str:
     return candidates[0][2]
 
 
+def _chain_payload(keyword: str, graph: dict, usages: list[dict], meta: dict) -> dict:
+    """Machine-readable chain summary consumed by the field-regression skill."""
+    node_fields = ("id", "kind", "label", "layer", "qual", "col", "row", "table", "op",
+                   "columns", "matched_columns", "title_zh", "purpose", "api", "display_name")
+    edge_fields = ("from", "to", "kind", "confidence", "op")
+    st_fields = ("source", "file", "statement_id", "op", "tables", "sql", "linked", "method", "qual")
+    nodes = [{k: n[k] for k in node_fields if n.get(k) is not None}
+             for n in graph.get("nodes", [])]
+    edges = [{k: e[k] for k in edge_fields if e.get(k) is not None}
+             for e in graph.get("edges", [])]
+    statements = [{k: st[k] for k in st_fields if st.get(k) is not None}
+                  for st in graph.get("db_statements", [])]
+    usages_slim = [{k: u[k] for k in ("file", "line", "layer", "occurrence_type", "snippet")
+                    if u.get(k) is not None}
+                   for u in usages]
+    return {
+        "keyword": keyword,
+        "meta": meta,
+        "usages": usages_slim,
+        "nodes": nodes,
+        "edges": edges,
+        "db_statements": statements,
+        "field_columns": graph.get("field_columns", []),
+        "table_schemas": graph.get("table_schemas", {}),
+        "field_enums": graph.get("field_enums", []),
+        "main_paths": graph.get("main_paths", []),
+        "scenarios": graph.get("scenarios", []),
+        "counts": {
+            "usages": len(usages),
+            "nodes": len(nodes),
+            "edges": len(edges),
+            "tables": sum(1 for n in nodes if n.get("kind") == "table"),
+            "db_statements": len(statements),
+            "field_columns": len(graph.get("field_columns", [])),
+            "field_enums": len(graph.get("field_enums", [])),
+            "scenarios": len(graph.get("scenarios", [])),
+        },
+    }
+
+
 def run(keyword: str, root: Path | str, profile_name: str = "auto",
         depth: int = 4, max_nodes: int = 300, out: Path | str | None = None,
-        variants: list[str] | None = None) -> dict:
+        variants: list[str] | None = None,
+        json_out: Path | str | None = None) -> dict:
     root = Path(root)
     profile_name = detect_profile_name(root) if profile_name == "auto" else profile_name
     profile = load_profile(profile_name, _profile_dir())
@@ -132,16 +176,27 @@ def run(keyword: str, root: Path | str, profile_name: str = "auto",
     else:
         graph = new_graph({"depth": min(depth, HARD_DEPTH_CAP)})
     graph["meta"]["profile"] = profile_name
-    graph = resolve_tables(graph, index, profile)
+    graph = resolve_tables(graph, index, profile, keyword_variants(keyword, variants))
+    graph["field_enums"] = detect_enums(keyword, root, index, variants)
     graph = prune_and_layout(graph, max_nodes, _layer_order(profile))
+    attach_semantics(graph, index, keyword)
 
-    output = Path(out) if out is not None else Path(".usage-trace") / f"{keyword}-report.html"
-    output.parent.mkdir(parents=True, exist_ok=True)
     meta = {
         "project": root.name,
         "language": profile_name,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    chain_path = Path(json_out) if json_out is not None else \
+        Path(".usage-trace") / f"{keyword}-chain.json"
+    chain_path.parent.mkdir(parents=True, exist_ok=True)
+    chain_path.write_text(
+        json.dumps(_chain_payload(keyword, graph, usages, meta),
+                   ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    output = Path(out) if out is not None else Path(".usage-trace") / f"{keyword}-report.html"
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(render(graph, keyword, meta, _template_path()), encoding="utf-8")
     return graph
 
@@ -155,9 +210,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--max-nodes", type=int, default=300)
     ap.add_argument("--variants", default="", help="comma-separated extra variants")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--json-out", default=None,
+                    help="chain JSON path (default .usage-trace/<keyword>-chain.json)")
     args = ap.parse_args(argv)
     variants = [v.strip() for v in args.variants.split(",") if v.strip()]
-    run(args.keyword, args.root, args.profile, args.depth, args.max_nodes, args.out, variants)
+    run(args.keyword, args.root, args.profile, args.depth, args.max_nodes,
+        args.out, variants, args.json_out)
 
 
 if __name__ == "__main__":

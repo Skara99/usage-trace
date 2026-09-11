@@ -106,6 +106,7 @@ Trace userId usage, call chain, and related tables
 | `--max-nodes` | 否 | `300` | 报告图节点上限 |
 | `--variants` | 否 | — | 额外关键字变体，逗号分隔 |
 | `--out` | 否 | `.usage-trace/<keyword>-report.html` | 输出 HTML 路径 |
+| `--json-out` | 否 | `.usage-trace/<keyword>-chain.json` | 链路 JSON（usages / graph / SQL / `field_columns` / `table_schemas` / `field_enums` / `scenarios`） |
 
 兼容旧命令名：`codex-find`。
 
@@ -113,12 +114,36 @@ Trace userId usage, call chain, and related tables
 
 ## 3. 报告内容
 
-单次运行生成 **一个离线 HTML**（无外链），通常包括：
+单次运行生成 **一个离线 HTML**（无外链）+ **一个链路 JSON**，通常包括：
 
 - 关键字命中位置（含命名变体）
-- 调用链图（层 → 类 → 方法）
-- 涉及数据库表与 SQL 片段
-- 交互面板（搜索、主题、节点详情）
+- 调用链图（层 → 类 → 方法；节点可显示接口路径和中文含义）
+- 链路场景（这条链做什么、入口接口、调用链、表）
+- 涉及数据库表、表内全部字段、当前字段对应列（高亮）
+- 枚举 / 固定取值（名称、取值、中文含义、使用场景、如何触发）
+- 字段 → 表列映射（`field_columns`，命中即代表字段对应数据库字段）
+- 左右栏可拖拽伸缩；视角 资深 / 初级 / PM（只改右侧节点详情详略）
+
+---
+
+## 3.5 字段回归流水线（v0.3.0）
+
+同一插件内置 `field-regression` skill，把字段分析升级为回归资产。触发：
+
+```text
+给 storeNo 生成回归用例并打通上线SQL
+```
+
+助手应自动：
+
+1. 运行 `usage-trace --keyword storeNo --root . --profile auto --depth 4`
+   并读取 `.usage-trace/storeNo-chain.json`（看 `field_columns` 判定是否为数据库字段）
+2. 整理业务场景 → `.usage-trace/storeNo/scenarios.yaml`
+3. 按场景生成接口用例（含 `db_seed` 造数）→ `.usage-trace/storeNo/cases/*.json`
+4. 组装幂等造数 SQL 上线文件 → `.usage-trace/storeNo/oss/YYYYMMDD_storeNo_<table>_seed.sql`
+5. 调用已有 apifox skill 自动回归 → `.usage-trace/storeNo/regression-result.json`
+
+`field_columns` 为空时自动降级：只生成接口级用例，不产出造数 SQL。
 
 ---
 
@@ -138,6 +163,12 @@ A: 让助手按 skill 执行
 **Q: 支持哪些语言？**  
 A: Java、Python、C#（见上表 profile）。`--profile auto` 自动选择。
 
+**Q: 报告里资深 / 初级 / PM 有什么区别？**  
+A: 只改变右侧节点详情：PM 隐藏源码、调用关系和复杂度；初级把复杂度改成中文且关系列表不可点；资深（默认）展示完整技术细节。调用链图、表、枚举、场景面板三个视角相同。
+
+**Q: OpenCode 怎么用？**  
+A: 把仓库 `skills/` 链到 `~/.config/opencode/skills/`（或写入 `opencode.jsonc` 的 `skills.paths`），并 `pip install -e .`。改完配置后需重启 OpenCode。
+
 ---
 
 ## 5. 维护者说明（非终端用户）
@@ -154,6 +185,7 @@ bash scripts/install.sh hooks        # 可选 pre-commit 同步
 
 ```text
 skills/usage-trace/SKILL.md              Skill 定义（权威副本）
+skills/field-regression/SKILL.md         字段回归流水线 skill（权威副本）
 plugins/usage-trace/skills/.../SKILL.md  plugin 内同步副本
 .codex-plugin/plugin.json                Codex plugin manifest
 .claude-plugin/                          Claude Code plugin + marketplace
@@ -161,4 +193,5 @@ plugins/usage-trace/skills/.../SKILL.md  plugin 内同步副本
 .agents/plugins/marketplace.json         Codex 仓库 marketplace
 plugins/usage-trace/                     多平台 thin plugin 包装
 scripts/                                 维护者安装/同步脚本
+docs/field-regression-plan.md            字段回归流水线设计文档
 ```

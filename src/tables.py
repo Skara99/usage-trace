@@ -47,6 +47,54 @@ _MYBATIS_XML_GLOBS = (
     "**/*Mapper.xml",
     "**/*Mapper*.xml",
 )
+# Generic variants that must never count as column evidence on their own
+# (they collide with SQL keywords / common identifiers).
+_FIELD_VARIANT_STOPWORDS = {
+    "id", "ids", "code", "type", "name", "status", "key", "value", "state",
+    "no", "num", "count", "total", "list", "data", "time", "date", "level",
+}
+_FIELD_COLUMN_SQL_MAX = 400
+_DDL_CONSTRAINT_PREFIXES = (
+    "primary", "unique", "key", "index", "constraint", "foreign", "check",
+    "fulltext", "spatial", "using",
+)
+_CREATE_TABLE_HEAD_RE = re.compile(
+    r"\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?"
+    r"(?:[\w$]+\s*\.\s*)?(`?[\w$]+`?|\"[^\"]+\"|'[^']+')\s*\(",
+    re.IGNORECASE,
+)
+_INSERT_COLS_RE = re.compile(
+    r"\binsert\s+into\s+(?:[\w$]+\s*\.\s*)?(`?[\w$]+`?|\"[^\"]+\"|'[^']+')"
+    r"\s*\(([^)]+)\)",
+    re.IGNORECASE | re.DOTALL,
+)
+_JAVA_FIELD_RE = re.compile(
+    r"(?:private|protected|public)\s+(?:static\s+)?(?:final\s+)?"
+    r"([\w.<>,?\s]+?)\s+([A-Za-z_]\w*)\s*[;=]",
+)
+_SQLALCHEMY_COLUMN_RE = re.compile(
+    r"""^\s*(\w+)\s*=\s*(?:Column|mapped_column)\s*\(\s*(?:['"]([^'"]+)['"]\s*,\s*)?(\w+)?""",
+    re.MULTILINE,
+)
+_SQLALCHEMY_MAPPED_RE = re.compile(
+    r"^\s*(\w+)\s*:\s*Mapped\s*\[",
+    re.MULTILINE,
+)
+_SQLALCHEMY_NAMED_COL_RE = re.compile(
+    r"""(?:Column|mapped_column)\s*\(\s*['"]([^'"]+)['"](?:\s*,\s*(\w+))?""",
+)
+_EF_PROP_RE = re.compile(
+    r"(?:\[Column\s*\(\s*(?:name\s*:\s*)?[\"']([^\"']+)[\"'][^]]*\]\s*)?"
+    r"public\s+[\w.<>,?\s]+?\s+(\w+)\s*\{\s*get",
+)
+_RESULT_COL_RE = re.compile(
+    r"<(?:id|result)\b([^>]*)>",
+    re.IGNORECASE,
+)
+_TABLE_FIELD_ATTR_RE = re.compile(
+    r'@(?:Column|TableField)\s*\(([^)]*)\)',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _rel_path(root: Path, file: Path) -> str:
@@ -738,7 +786,400 @@ def _parse_source_sql_literals(root: Path, unit_by_id: dict[str, dict], source: 
     return out
 
 
-def resolve_tables(graph: dict, index, profile: dict) -> dict:
+def _column_variants(variants: list[str]) -> list[str]:
+    """Filter keyword variants down to column-evidence candidates.
+
+    Single-part generic words (id, code, name, ...) are dropped: they match
+    too much unrelated SQL and would flood field_columns with false hits.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    unique = sorted({(v or "").strip() for v in variants}, key=lambda v: (-len(v), v))
+    for v in unique:
+        if not v:
+            continue
+        parts = [p for p in re.split(r"[_\-]+|(?<=[a-z0-9])(?=[A-Z])", v) if p]
+        low = _snake_form(v).replace("_", "")
+        if len(parts) <= 1 and low in _FIELD_VARIANT_STOPWORDS:
+            continue
+        if v.lower() in seen:
+            continue
+        seen.add(v.lower())
+        out.append(v)
+    return out
+
+
+def _snake_form(v: str) -> str:
+    parts = [p for p in re.split(r"[_\-]+|(?<=[a-z0-9])(?=[A-Z])", v) if p]
+    return "_".join(p.lower() for p in parts) if parts else v.lower()
+
+
+def _canonical_column(variants: list[str]) -> str | None:
+    """Canonical column name: the shortest already-snake_case variant (store_no)."""
+    exact = {v for v in variants if "_" in v and v == _snake_form(v)}
+    return min(exact, key=len) if exact else None
+
+
+def _detect_field_columns(db_statements: list[dict], variants: list[str]) -> list[dict]:
+    """Map keyword variants onto (table, column) pairs from resolved SQL statements.
+
+    Conservative word-boundary match over already-parsed statement SQL. Both
+    physical columns (``WHERE store_no = ...``) and parameter placeholders
+    (``#{storeNo}``) are evidence that the traced field feeds this statement.
+    """
+    candidates = _column_variants(variants or [])
+    if not candidates:
+        return []
+    # deterministic order: longest first, then lexical, so matching is stable
+    candidates = sorted(candidates, key=lambda v: (-len(v), v))
+    canonical = _canonical_column(variants)
+    patterns = [
+        (v, re.compile(rf"(?<![\w$]){re.escape(v)}(?![\w$])", re.IGNORECASE))
+        for v in candidates
+    ]
+    hits: dict[tuple, dict] = {}
+    for st in db_statements:
+        sql = st.get("sql") or ""
+        tables = [t for t in (st.get("tables") or []) if t]
+        if not sql or not tables:
+            continue
+        for variant, rx in patterns:
+            if not rx.search(sql):
+                continue
+            column = canonical or _snake_form(variant)
+            for table in tables:
+                key = (table, column, st.get("op", "unknown"), st.get("statement_id", ""))
+                if key in hits:
+                    continue
+                hits[key] = {
+                    "table": table,
+                    "column": column,
+                    "variant": variant,
+                    "op": st.get("op", "unknown"),
+                    "source": st.get("source", "unknown"),
+                    "statement_id": st.get("statement_id", ""),
+                    "sql": sql[:_FIELD_COLUMN_SQL_MAX],
+                    "file": st.get("file", ""),
+                }
+    return [hits[k] for k in sorted(hits)]
+
+
+def _ident(name: str) -> str:
+    return (name or "").strip().strip("`\"'[]")
+
+
+def _split_sql_list(body: str) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    quote = ""
+    for ch in body:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "\"'`":
+            quote = ch
+            buf.append(ch)
+            continue
+        if ch == "(":
+            depth += 1
+            buf.append(ch)
+            continue
+        if ch == ")":
+            depth = max(0, depth - 1)
+            buf.append(ch)
+            continue
+        if ch == "," and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    if buf:
+        parts.append("".join(buf).strip())
+    return [p for p in parts if p]
+
+
+def _add_schema_col(schemas: dict[str, list[dict]], table: str, name: str,
+                    source: str, col_type: str = "", field: str = "") -> None:
+    table = _ident(table)
+    name = _ident(name)
+    if not table or not name:
+        return
+    cols = schemas.setdefault(table, [])
+    low = name.lower()
+    for existing in cols:
+        if existing["name"].lower() == low:
+            if col_type and not existing.get("type"):
+                existing["type"] = col_type
+            if field and not existing.get("field"):
+                existing["field"] = field
+            if source and source not in existing.get("sources", []):
+                existing.setdefault("sources", []).append(source)
+            return
+    cols.append({
+        "name": name,
+        "type": col_type,
+        "field": field,
+        "source": source,
+        "sources": [source] if source else [],
+    })
+
+
+def _balanced_paren_body(sql: str, open_paren: int) -> str | None:
+    depth = 0
+    quote = ""
+    for i, ch in enumerate(sql[open_paren:], open_paren):
+        if quote:
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "\"'`":
+            quote = ch
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return sql[open_paren + 1: i]
+    return None
+
+
+def _parse_create_table_sql(sql: str, schemas: dict[str, list[dict]], source: str = "ddl") -> None:
+    for m in _CREATE_TABLE_HEAD_RE.finditer(sql):
+        table = _ident(m.group(1))
+        body = _balanced_paren_body(sql, m.end() - 1)
+        if not body:
+            continue
+        for part in _split_sql_list(body):
+            head = part.split(None, 1)
+            if not head:
+                continue
+            first = _ident(head[0]).lower()
+            if first in _DDL_CONSTRAINT_PREFIXES or first.endswith("key"):
+                continue
+            col = _ident(head[0])
+            col_type = head[1].split()[0].rstrip(",") if len(head) > 1 else ""
+            _add_schema_col(schemas, table, col, source, col_type)
+
+
+def _parse_insert_columns(sql: str, schemas: dict[str, list[dict]]) -> None:
+    for m in _INSERT_COLS_RE.finditer(sql or ""):
+        table = _ident(m.group(1))
+        for raw in _split_sql_list(m.group(2) or ""):
+            _add_schema_col(schemas, table, raw, "sql_insert")
+
+
+def _java_entity_window(text: str, cls_start: int) -> str:
+    brace = text.find("{", cls_start)
+    if brace < 0:
+        return text[cls_start: cls_start + 4000]
+    depth = 0
+    for i, ch in enumerate(text[brace:], brace):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[cls_start: i + 1]
+    return text[cls_start:]
+
+
+def _parse_java_entity_columns(text: str, schemas: dict[str, list[dict]]) -> None:
+    cls = _class_name(text)
+    if not cls:
+        return
+    table = None
+    tm = _TABLE_NAME_RE.search(text) or re.search(
+        r"@Table\s*\(\s*name\s*=\s*\"([^\"]+)\"", text)
+    if tm:
+        table = tm.group(1)
+    elif "@Entity" in text:
+        table = cls
+    if not table:
+        return
+    source = "mybatis_plus" if "@TableName" in text else "jpa"
+    cls_m = re.search(r"\b(?:class|record)\s+" + re.escape(cls) + r"\b", text)
+    window = _java_entity_window(text, cls_m.start() if cls_m else 0)
+    for fm in _JAVA_FIELD_RE.finditer(window):
+        java_type, field = fm.group(1).strip(), fm.group(2)
+        if field in {"serialVersionUID"}:
+            continue
+        prefix = window[max(0, fm.start() - 240): fm.start()]
+        cut = max(prefix.rfind(";"), prefix.rfind("{"), prefix.rfind("}"))
+        if cut >= 0:
+            prefix = prefix[cut + 1:]
+        col = None
+        am = _TABLE_FIELD_ATTR_RE.search(prefix)
+        if am:
+            col = _attr_value(am.group(1), "name") or _attr_value(am.group(1), "value")
+        _add_schema_col(schemas, table, col or _snake_form(field), source,
+                        java_type.split("<", 1)[0].strip(), field)
+
+
+def _sqlalchemy_cols_from_window(window: str, table: str,
+                                 schemas: dict[str, list[dict]]) -> None:
+    for cm in _SQLALCHEMY_COLUMN_RE.finditer(window):
+        attr, explicit, col_type = cm.group(1), cm.group(2), cm.group(3) or ""
+        if attr.startswith("__"):
+            continue
+        _add_schema_col(schemas, table, explicit or attr, "sqlalchemy", col_type, attr)
+    for cm in _SQLALCHEMY_MAPPED_RE.finditer(window):
+        _add_schema_col(schemas, table, cm.group(1), "sqlalchemy", "", cm.group(1))
+    for cm in _SQLALCHEMY_NAMED_COL_RE.finditer(window):
+        _add_schema_col(schemas, table, cm.group(1), "sqlalchemy", cm.group(2) or "")
+
+
+def _parse_sqlalchemy_columns(text: str, schemas: dict[str, list[dict]]) -> None:
+    for cls_m in re.finditer(r"class\s+(\w+)\s*[:(]", text):
+        window = text[cls_m.start(): cls_m.start() + 2500]
+        nxt = re.search(r"\nclass\s+", window[1:])
+        if nxt:
+            window = window[: nxt.start() + 1]
+        tm = _SQLALCHEMY_TABLENAME_RE.search(window) or _SQLALCHEMY_TABLE_CTOR_RE.search(window)
+        if not tm:
+            continue
+        _sqlalchemy_cols_from_window(window, tm.group(1), schemas)
+    for tm in _SQLALCHEMY_TABLE_CTOR_RE.finditer(text):
+        _sqlalchemy_cols_from_window(text[tm.start(): tm.start() + 1200], tm.group(1), schemas)
+
+
+def _parse_ef_columns(text: str, schemas: dict[str, list[dict]]) -> None:
+    for cls_m in re.finditer(r"\b(?:class|record)\s+(\w+)", text):
+        start = max(0, cls_m.start() - 300)
+        header = text[start: cls_m.start() + 80]
+        tm = _EF_TABLE_ATTR_RE.search(header)
+        window = _java_entity_window(text, cls_m.start())
+        table = tm.group(1) if tm else None
+        if not table:
+            continue
+        for pm in _EF_PROP_RE.finditer(window):
+            col, prop = pm.group(1), pm.group(2)
+            if prop in {"Equals", "GetHashCode", "ToString"}:
+                continue
+            _add_schema_col(schemas, table, col or _snake_form(prop), "ef_core", "", prop)
+
+
+def _parse_mybatis_result_map(text: str, schemas: dict[str, list[dict]],
+                              fallback_table: str | None = None) -> None:
+    for rm in re.finditer(r"<resultMap\b([^>]*)>(.*?)</resultMap>",
+                          text, re.IGNORECASE | re.DOTALL):
+        if not fallback_table:
+            continue
+        for cm in _RESULT_COL_RE.finditer(rm.group(2) or ""):
+            col = _attr_value(cm.group(1), "column")
+            field = _attr_value(cm.group(1), "property") or ""
+            if col:
+                _add_schema_col(schemas, fallback_table, col, "mybatis_resultmap", "", field)
+
+
+def _collect_table_schemas(root: Path, index, profile: dict,
+                           db_statements: list[dict]) -> dict[str, list[dict]]:
+    schemas: dict[str, list[dict]] = {}
+    exclude = {d.lower() for d in profile.get("exclude", {}).get("dirs", [])}
+
+    def _skip(path: Path) -> bool:
+        return any(part.lower() in exclude for part in path.parts)
+
+    for path in [Path(p) for p in (getattr(index, "files", {}) or {})]:
+        if _skip(path):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        suffix = path.suffix.lower()
+        if suffix == ".java":
+            _parse_java_entity_columns(text, schemas)
+        elif suffix == ".py":
+            _parse_sqlalchemy_columns(text, schemas)
+        elif suffix == ".cs":
+            _parse_ef_columns(text, schemas)
+        elif suffix == ".xml":
+            tables = []
+            for st in db_statements:
+                if st.get("file") and Path(st["file"]).name == path.name:
+                    tables.extend(st.get("tables") or [])
+            for table in dict.fromkeys(tables):
+                _parse_mybatis_result_map(text, schemas, table)
+
+    for sql_file in root.rglob("*.sql"):
+        if _skip(sql_file):
+            continue
+        try:
+            text = sql_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        _parse_create_table_sql(text, schemas, "ddl")
+
+    for st in db_statements:
+        sql = st.get("sql") or ""
+        _parse_create_table_sql(sql, schemas, "sql")
+        _parse_insert_columns(sql, schemas)
+        _parse_sql_listed_columns(sql, st.get("tables") or [], schemas)
+    return schemas
+
+
+_SQL_LIST_SKIP = {
+    "from", "join", "into", "update", "select", "where", "and", "or", "set",
+    "on", "as", "by", "not", "null", "is", "in", "distinct", "case", "when",
+    "then", "else", "end", "left", "right", "inner", "outer", "cross",
+}
+
+
+def _parse_sql_listed_columns(sql: str, tables: list[str],
+                              schemas: dict[str, list[dict]]) -> None:
+    """Pull explicit column lists from INSERT/UPDATE/SELECT (not SELECT *)."""
+    if not sql or not tables:
+        return
+    um = re.search(r"\bupdate\s+[\w.`\"']+\s+set\s+(.+?)(?:\bwhere\b|$)",
+                   sql, re.IGNORECASE | re.DOTALL)
+    if um:
+        for part in _split_sql_list(um.group(1)):
+            col = _ident(part.split("=", 1)[0].split(".")[-1])
+            if col:
+                for table in tables:
+                    _add_schema_col(schemas, table, col, "sql_update")
+    sm = re.search(r"\bselect\s+(distinct\s+)?(.+?)\s+from\b",
+                   sql, re.IGNORECASE | re.DOTALL)
+    if sm:
+        proj = sm.group(2).strip()
+        if proj != "*":
+            for part in _split_sql_list(proj):
+                token = part.split(" as ", 1)[0] if re.search(r"\bas\b", part, re.I) else part
+                col = _ident(token.split(".")[-1])
+                if not col or col == "*" or col.lower() in _SQL_LIST_SKIP:
+                    continue
+                for table in tables:
+                    _add_schema_col(schemas, table, col, "sql_select")
+
+
+def _attach_table_schemas(graph: dict, schemas: dict[str, list[dict]],
+                          field_columns: list[dict],
+                          variants: list[str] | None = None) -> None:
+    hits: dict[str, set[str]] = {}
+    for fc in field_columns or []:
+        hits.setdefault(fc.get("table", ""), set()).add((fc.get("column") or "").lower())
+    variant_snakes = {_snake_form(v) for v in (variants or []) if v}
+    used = {n.get("table") for n in graph.get("nodes", []) if n.get("kind") == "table"}
+    table_schemas = {t: schemas[t] for t in used if t in schemas}
+    graph["table_schemas"] = table_schemas
+    for node in graph.get("nodes", []):
+        if node.get("kind") != "table":
+            continue
+        cols = list(schemas.get(node.get("table"), []))
+        marked = hits.get(node.get("table"), set())
+        for col in cols:
+            low = col["name"].lower()
+            col["matched"] = low in marked or low in variant_snakes
+        node["columns"] = cols
+        node["matched_columns"] = [c["name"] for c in cols if c.get("matched")]
+
+
+def resolve_tables(graph: dict, index, profile: dict,
+                   keyword_variants: list[str] | None = None) -> dict:
     root = Path(index.root) if getattr(index, "root", None) else _root_from_index(index)
     ts = profile.get("table_sources", {})
     statements: list[dict] = []
@@ -818,6 +1259,9 @@ def resolve_tables(graph: dict, index, profile: dict) -> dict:
             tnode["sql_snippet"] = "\n---\n".join(tnode["sql_snippets"])
             add_edge(graph, qual, tnode["id"], "references", "confirmed")["op"] = st["op"]
     graph["db_statements"] = db_statements
+    graph["field_columns"] = _detect_field_columns(db_statements, keyword_variants or [])
+    schemas = _collect_table_schemas(root, index, profile, db_statements)
+    _attach_table_schemas(graph, schemas, graph["field_columns"], keyword_variants)
     return graph
 
 
